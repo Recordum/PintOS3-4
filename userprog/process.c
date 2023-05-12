@@ -21,11 +21,19 @@
 #ifdef VM
 #include "vm/vm.h"
 #endif
+#define VM
 
 static void process_cleanup(void);
 static bool load(const char *file_name, struct intr_frame *if_);
 static void initd(void *f_name);
 static void __do_fork(void *);
+struct lazy_load_arg
+{
+	struct file *file;
+	off_t ofs;
+	uint32_t read_bytes;
+	uint32_t zero_bytes;
+};
 
 /* General process initializer for initd and other process. */
 static void
@@ -502,7 +510,7 @@ load(const char *file_name, struct intr_frame *if_)
 	}
 
 	/* Read and verify executable header. */
-	if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr || memcmp(ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
+	if (file_read(file, &ehdr,  sizeof ehdr) != sizeof ehdr || memcmp(ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
 		|| ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Phdr) || ehdr.e_phnum > 1024)
 	{
 		printf("load: %s: error loading executable\n", file_name);
@@ -572,8 +580,9 @@ load(const char *file_name, struct intr_frame *if_)
 	// 현재 실행중인 파일은 수정할 수 없게 막는다.
 	file_deny_write(file);
 	/* Set up stack. */
-	if (!setup_stack(if_)) // user stack 초기화
+	if (!setup_stack(if_)){ // user stack 초기화
 		goto done;
+	}
 
 	/* Start address. */
 	if_->rip = ehdr.e_entry; // entry point 초기화
@@ -634,6 +643,60 @@ validate_segment(const struct Phdr *phdr, struct file *file)
 
 	/* It's okay. */
 	return true;
+}
+// 파일 객체에 대한 파일 디스크립터를 생성하는 함수
+int process_add_file(struct file *f)
+{
+	struct thread *curr = thread_current();
+	struct file **fdt = curr->fdt;
+
+	// limit을 넘지 않는 범위 안에서 빈 자리 탐색
+	while (curr->next_fd < FDT_COUNT_LIMIT && fdt[curr->next_fd])
+		curr->next_fd++;
+	if (curr->next_fd >= FDT_COUNT_LIMIT)
+		return -1;
+	fdt[curr->next_fd] = f;
+
+	return curr->next_fd;
+}
+
+// 파일 객체를 검색하는 함수
+struct file *process_get_file(int fd)
+{
+	struct thread *curr = thread_current();
+	struct file **fdt = curr->fdt;
+	/* 파일 디스크립터에 해당하는 파일 객체를 리턴 */
+	/* 없을 시 NULL 리턴 */
+	if (fd < 2 || fd >= FDT_COUNT_LIMIT)
+		return NULL;
+	return fdt[fd];
+}
+
+// 파일 디스크립터 테이블에서 파일 객체를 제거하는 함수
+void process_close_file(int fd)
+{
+	struct thread *curr = thread_current();
+	struct file **fdt = curr->fdt;
+	if (fd < 2 || fd >= FDT_COUNT_LIMIT)
+		return NULL;
+	fdt[fd] = NULL;
+}
+
+// 자식 리스트에서 원하는 프로세스를 검색하는 함수
+struct thread *get_child_process(int pid)
+{
+	/* 자식 리스트에 접근하여 프로세스 디스크립터 검색 */
+	struct thread *cur = thread_current();
+	struct list *child_list = &cur->child_list;
+	for (struct list_elem *e = list_begin(child_list); e != list_end(child_list); e = list_next(e))
+	{
+		struct thread *t = list_entry(e, struct thread, child_elem);
+		/* 해당 pid가 존재하면 프로세스 디스크립터 반환 */
+		if (t->tid == pid)
+			return t;
+	}
+	/* 리스트에 존재하지 않으면 NULL 리턴 */
+	return NULL;
 }
 
 #ifndef VM
@@ -736,65 +799,9 @@ static bool
 install_page(void *upage, void *kpage, bool writable)
 {
 	struct thread *t = thread_current();
-
 	/* Verify that there's not already a page at that virtual
 	 * address, then map our page there. */
 	return (pml4_get_page(t->pml4, upage) == NULL && pml4_set_page(t->pml4, upage, kpage, writable));
-}
-
-// 파일 객체에 대한 파일 디스크립터를 생성하는 함수
-int process_add_file(struct file *f)
-{
-	struct thread *curr = thread_current();
-	struct file **fdt = curr->fdt;
-
-	// limit을 넘지 않는 범위 안에서 빈 자리 탐색
-	while (curr->next_fd < FDT_COUNT_LIMIT && fdt[curr->next_fd])
-		curr->next_fd++;
-	if (curr->next_fd >= FDT_COUNT_LIMIT)
-		return -1;
-	fdt[curr->next_fd] = f;
-
-	return curr->next_fd;
-}
-
-// 파일 객체를 검색하는 함수
-struct file *process_get_file(int fd)
-{
-	struct thread *curr = thread_current();
-	struct file **fdt = curr->fdt;
-	/* 파일 디스크립터에 해당하는 파일 객체를 리턴 */
-	/* 없을 시 NULL 리턴 */
-	if (fd < 2 || fd >= FDT_COUNT_LIMIT)
-		return NULL;
-	return fdt[fd];
-}
-
-// 파일 디스크립터 테이블에서 파일 객체를 제거하는 함수
-void process_close_file(int fd)
-{
-	struct thread *curr = thread_current();
-	struct file **fdt = curr->fdt;
-	if (fd < 2 || fd >= FDT_COUNT_LIMIT)
-		return NULL;
-	fdt[fd] = NULL;
-}
-
-// 자식 리스트에서 원하는 프로세스를 검색하는 함수
-struct thread *get_child_process(int pid)
-{
-	/* 자식 리스트에 접근하여 프로세스 디스크립터 검색 */
-	struct thread *cur = thread_current();
-	struct list *child_list = &cur->child_list;
-	for (struct list_elem *e = list_begin(child_list); e != list_end(child_list); e = list_next(e))
-	{
-		struct thread *t = list_entry(e, struct thread, child_elem);
-		/* 해당 pid가 존재하면 프로세스 디스크립터 반환 */
-		if (t->tid == pid)
-			return t;
-	}
-	/* 리스트에 존재하지 않으면 NULL 리턴 */
-	return NULL;
 }
 
 #else
@@ -808,6 +815,23 @@ lazy_load_segment(struct page *page, void *aux)
 	/* TODO: Load the segment from the file */
 	/* TODO: This called when the first page fault occurs on address VA. */
 	/* TODO: VA is available when calling this function. */
+	struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *)aux;
+	struct file *file = lazy_load_arg->file;
+	off_t ofs = lazy_load_arg->ofs;
+	uint32_t page_read_bytes = lazy_load_arg->read_bytes;
+	uint32_t page_zero_bytes = lazy_load_arg->zero_bytes;
+
+	file_seek(file, ofs);
+	if (page == NULL)
+		return false;
+	if (file_read(file, page->frame->kva, page_read_bytes) != (int)page_read_bytes)
+	{
+		palloc_free_page(page);
+		return false;
+	}
+	memset(page->frame->kva + page_read_bytes, 0, page_zero_bytes);
+	free(lazy_load_arg);
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -841,15 +865,20 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer(VM_ANON, upage,
-											writable, lazy_load_segment, aux))
+		struct lazy_load_arg *aux = (struct lazy_load_arg *)malloc(sizeof(struct lazy_load_arg));
+		aux->file = file;
+		aux->ofs = ofs;
+		aux->read_bytes = read_bytes;
+		aux->zero_bytes = zero_bytes;
+		if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux)){
 			return false;
+		}	
 
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		ofs += page_read_bytes;
 	}
 	return true;
 }
@@ -860,12 +889,20 @@ setup_stack(struct intr_frame *if_)
 {
 	bool success = false;
 	void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
-
+	bool writable = true;
 	/* TODO: Map the stack on stack_bottom and claim the page immediately.
 	 * TODO: If success, set the rsp accordingly.
 	 * TODO: You should mark the page is stack. */
 	/* TODO: Your code goes here */
 
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0 , stack_bottom, writable))
+	{
+		success = vm_claim_page(stack_bottom);
+		if (success)
+			if_->rsp = USER_STACK;
+	}
+
 	return success;
 }
+
 #endif /* VM */
