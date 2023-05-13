@@ -9,6 +9,7 @@ unsigned page_hash(const struct hash_elem *p_, void *aux UNUSED);
 bool page_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux UNUSED);
 void page_initialized(struct page *init_page, void *upage, vm_initializer *init, enum vm_type type, void *aux);
 bool get_initializer_type(enum vm_type type);
+void hash_destructor(struct hash_elem *hash_elem, void *aux);
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 
@@ -181,16 +182,16 @@ bool vm_try_handle_fault(struct intr_frame *f UNUSED, void *addr UNUSED,
 	/* TODO: Validate the fault */
 	if (not_present)
 	{
-		page = spt_find_page(spt, addr);
+		page = spt_find_page(spt, pg_round_down(addr));
 		if (page == NULL)
 			return false;
 		if (write == 1 && page->writable == 0) // write 불가능한 페이지에 write 요청한 경우
 			return false;
 		return vm_do_claim_page(page);
 	}
-	printf("try_handle_fault : return false\n");
 	/* TODO: Your code goes here */
-	return false;
+	exit(-1);
+
 }
 
 /* Free the page.
@@ -246,10 +247,11 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 	while(hash_next(&hash_ite)){
 		struct page *src_page = hash_entry(hash_cur(&hash_ite), struct page, hash_elem);
 		struct page *dst_page = malloc(sizeof(struct page));
+		dst_page->uninit.aux 
 		memcpy(dst_page, src_page, sizeof(struct page));
 		if(VM_TYPE(dst_page->operations->type) != VM_UNINIT){
 			vm_do_claim_page(dst_page);
-			memcpy(dst_page->va, src_page->frame->kva, PGSIZE);
+			memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 		}
 		spt_insert_page(dst, dst_page);	
 		
@@ -262,12 +264,16 @@ void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED)
 {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
+	
 	struct hash_iterator hash_ite;
-	hash_first(&hash_ite, spt);
-	while(hash_next(&hash_ite)){
-		struct page *src_page = hash_entry(hash_cur(&hash_ite), struct page, hash_elem);
-		destroy(src_page);
-	}
+	hash_clear(&spt->spt_hash, hash_destructor);
+	
+}
+
+void hash_destructor(struct hash_elem *hash_elem, void *aux){
+	struct page *page = hash_entry(hash_elem, struct page, hash_elem);
+	destroy(page);
+	free(page);
 }
 /* Returns a hash value for page p. */
 unsigned
