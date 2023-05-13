@@ -7,7 +7,8 @@
 
 unsigned page_hash(const struct hash_elem *p_, void *aux UNUSED);
 bool page_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux UNUSED);
-void page_initialized(init_page, upage, init, type, aux);
+void page_initialized(struct page *init_page, void *upage, vm_initializer *init, enum vm_type type, void *aux);
+bool get_initializer_type(enum vm_type type);
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 
@@ -47,6 +48,8 @@ static struct frame *vm_evict_frame(void);
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
  * `vm_alloc_page`. */
+
+
 bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 									vm_initializer *init, void *aux)
 {
@@ -61,18 +64,10 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 		/* TODO: Create the page, fetch the initialier according to the VM type,
 		 * TODO: and then create "uninit" page struct by calling uninit_new. You
 		 * TODO: should modify the field after calling the uninit_new. */
-		init_page = (struct page *)malloc(sizeof(struct page));
 		
-		if (VM_TYPE(type) == VM_ANON)
-		{
-			uninit_new(init_page, upage, init, type, aux, anon_initializer);
-		}
-		else
-		{
-			uninit_new(init_page, upage, init, type, aux, file_backed_initializer);
-		}
+		init_page = (struct page *)malloc(sizeof(struct page));
+		page_initialized(init_page, upage, init, type, aux);
 		init_page->writable = writable;
-		// page_initialized(init_page, upage, init, type, aux);
 		/* TODO: Insert the page into the spt. */
 		return spt_insert_page(spt, init_page);
 	}
@@ -80,7 +75,8 @@ err:
 	return false;
 }
 
-void page_initialized(init_page, upage, init, type, aux)
+void 
+page_initialized(struct page *init_page, void *upage, vm_initializer *init, enum vm_type type, void *aux)
 {
 	if (VM_TYPE(type) == VM_ANON)
 	{
@@ -179,7 +175,8 @@ vm_handle_wp(struct page *page UNUSED)
 bool vm_try_handle_fault(struct intr_frame *f UNUSED, void *addr UNUSED,
 						 bool user UNUSED, bool write UNUSED, bool not_present UNUSED)
 {
-	struct supplemental_page_table *spt UNUSED = &thread_current()->spt;
+	struct thread* current_thread = thread_current();
+	struct supplemental_page_table *spt UNUSED = &current_thread->spt;
 	struct page *page = NULL;
 	/* TODO: Validate the fault */
 	if (not_present)
@@ -244,7 +241,20 @@ void supplemental_page_table_init(struct supplemental_page_table *spt UNUSED)
 bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 								  struct supplemental_page_table *src UNUSED)
 {
-	memcpy()
+	struct hash_iterator hash_ite;
+	hash_first(&hash_ite, src);
+	while(hash_next(&hash_ite)){
+		struct page *src_page = hash_entry(hash_cur(&hash_ite), struct page, hash_elem);
+		struct page *dst_page = malloc(sizeof(struct page));
+		memcpy(dst_page, src_page, sizeof(struct page));
+		if(VM_TYPE(dst_page->operations->type) != VM_UNINIT){
+			vm_do_claim_page(dst_page);
+			memcpy(dst_page->va, src_page->frame->kva, PGSIZE);
+		}
+		spt_insert_page(dst, dst_page);	
+		
+	}
+	return true;
 }
 
 /* Free the resource hold by the supplemental page table */
@@ -252,6 +262,12 @@ void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED)
 {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
+	struct hash_iterator hash_ite;
+	hash_first(&hash_ite, spt);
+	while(hash_next(&hash_ite)){
+		struct page *src_page = hash_entry(hash_cur(&hash_ite), struct page, hash_elem);
+		destroy(src_page);
+	}
 }
 /* Returns a hash value for page p. */
 unsigned
