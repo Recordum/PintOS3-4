@@ -830,7 +830,7 @@ lazy_load_segment(struct page *page, void *aux)
 		return false;
 	}
 	memset(page->frame->kva + page_read_bytes, 0, page_zero_bytes);
-	free(lazy_load_arg);
+	// free(lazy_load_arg);
 	return true;
 }
 
