@@ -14,7 +14,7 @@
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
-
+#include "vm/vm.h"
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
 void check_address(void *addr);
@@ -64,6 +64,8 @@ void syscall_init(void)
 void syscall_handler(struct intr_frame *f UNUSED)
 {
 	int syscall_n = f->R.rax; /* 시스템 콜 넘버 */
+	struct thread* current_thread = thread_current();
+	current_thread->user_rsp = f->rsp;
 	switch (syscall_n)
 	{
 	case SYS_HALT:
@@ -190,7 +192,6 @@ void close(int fd)
 int read(int fd, void *buffer, unsigned size)
 {
 	check_address(buffer);
-
 	char *ptr = (char *)buffer;
 	int bytes_read = 0;
 
@@ -219,6 +220,8 @@ int read(int fd, void *buffer, unsigned size)
 			lock_release(&filesys_lock);
 			return -1;
 		}
+		
+
 		bytes_read = file_read(file, buffer, size);
 		lock_release(&filesys_lock);
 	}
@@ -239,9 +242,15 @@ int write(int fd, const void *buffer, unsigned size)
 		if (fd < 2)
 			return -1;
 		struct file *file = process_get_file(fd);
+		// struct page* page = spt_find_page(&thread_current()->spt, buffer);
 		if (file == NULL)
 			return -1;
 		lock_acquire(&filesys_lock);
+		// if(page != NULL && !page->writable)
+		// {
+		// 	lock_release(&filesys_lock);
+		// 	exit(-1);
+		// }
 		bytes_write = file_write(file, buffer, size);
 		lock_release(&filesys_lock);
 	}

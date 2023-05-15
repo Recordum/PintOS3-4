@@ -5,12 +5,13 @@
     "list.h": "c",
     "synch.h": "c",
     "process.h": "c",
-    "malloc.h": "c"
+    "malloc.h": "c",
+    "*.inc": "c"
   },
 
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "[c]": {
     "editor.defaultFormatter": "ms-vscode.cpptools"
-  },
+  }
 }

@@ -98,7 +98,7 @@ int wait(pid_t pid)
 
 bool create(const char *file, unsigned initial_size)
 {
-	return syscall2(SYS_CREATE, file, initial_size);
+	return `(SYS_CREATE, file, initial_size);
 }
 
 bool remove(const char *file)

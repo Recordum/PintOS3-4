@@ -109,7 +109,7 @@ struct thread
 	int exit_status;
 	struct file **fdt;
 	int next_fd;
-
+	void* user_rsp;
 	struct intr_frame parent_if;
 	struct list child_list;
 	struct list_elem child_elem;

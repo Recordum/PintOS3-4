@@ -10,6 +10,8 @@ bool page_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux
 void page_initialized(struct page *init_page, void *upage, vm_initializer *init, enum vm_type type, void *aux);
 bool get_initializer_type(enum vm_type type);
 void hash_destructor(struct hash_elem *hash_elem, void *aux);
+bool is_stack_addr(void *addr, void* rsp);
+bool is_validate(void* addr);
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 
@@ -162,6 +164,9 @@ vm_get_frame(void)
 static void
 vm_stack_growth(void *addr UNUSED)
 {
+	vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true);
+	// 	exit(-1);
+	// }
 }
 
 /* Handle the fault on write_protected page */
@@ -173,24 +178,54 @@ vm_handle_wp(struct page *page UNUSED)
 /* Return true on success */
 bool vm_try_handle_fault(struct intr_frame *f UNUSED, void *addr UNUSED,
 						 bool user UNUSED, bool write UNUSED, bool not_present UNUSED)
-{
+{	
 	struct thread *current_thread = thread_current();
 	struct supplemental_page_table *spt UNUSED = &current_thread->spt;
 	struct page *page = NULL;
+	
+	/*syscall */
 	/* TODO: Validate the fault */
-	if (not_present)
+	// if(addr == NULL || is_kernel_vaddr(addr)){
+	// 	return false;
+	// }
+	
+	if (!not_present)
 	{
-		page = spt_find_page(spt, pg_round_down(addr));
-		if (page == NULL)
-			return false;
-		if (write == 1 && page->writable == 0) // write 불가능한 페이지에 write 요청한 경우
-			return false;
-		return vm_do_claim_page(page);
+		return false;
+	}
+	if(user && is_stack_addr(addr, f->rsp))
+	{
+		vm_stack_growth(addr);
+	}
+	if(!user && is_stack_addr(addr, current_thread->user_rsp))
+	{
+		vm_stack_growth(addr);
+	}
+	
+	page = spt_find_page(spt, pg_round_down(addr));
+	if (page == NULL)
+	{
+		return false;
+	}
+	if (write && page->writable == 0)
+	{
+		return false;
 	}
 	/* TODO: Your code goes here */
-	return false;
+	return vm_claim_page(addr);
+}
+bool
+is_stack_addr(void *addr, void* rsp){
+	return USER_STACK - (1<<20) <= rsp - (1<<3)  || rsp  <= addr && addr <= USER_STACK; 
 }
 
+bool
+is_validate(void* addr){
+	
+	if(addr == NULL || is_kernel_vaddr(addr)){
+		return false;
+	}
+}
 /* Free the page.
  * DO NOT MODIFY THIS FUNCTION. */
 void vm_dealloc_page(struct page *page)
@@ -207,7 +242,9 @@ bool vm_claim_page(void *va UNUSED)
 	/* TODO: Fill this function */
 	if (page == NULL)
 	{
+		// printf("page == NULL \n");
 		PANIC("TODO");
+		// return false;
 	}
 
 	return vm_do_claim_page(page);
@@ -240,13 +277,13 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 								  struct supplemental_page_table *src UNUSED)
 {
 	struct hash_iterator hash_ite;
-	hash_first(&hash_ite, src);
+	hash_first(&hash_ite, &src->spt_hash);
 	while (hash_next(&hash_ite))
 	{
 		struct page *src_page = hash_entry(hash_cur(&hash_ite), struct page, hash_elem);
 		enum vm_type type = src_page->operations->type;
 		bool writable = src_page->writable;
-		if (VM_TYPE(src_page->operations->type) == VM_UNINIT)
+		if (VM_TYPE(type) == VM_UNINIT)
 		{
 			vm_alloc_page_with_initializer(src_page->uninit.type, src_page->va,
 											writable, src_page->uninit.init, src_page->uninit.aux);
